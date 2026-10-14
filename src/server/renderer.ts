@@ -17,6 +17,7 @@ import {
 import { ITag } from './interfaces/tag'
 import { DEFAULT_POST_PAGE_SIZE, DEFAULT_ARCHIVES_PAGE_SIZE } from '../helpers/constants'
 import markdown from './plugins/markdown'
+import clearGeneratedOutput from './utils/clear-generated-output'
 import { IMenu } from './interfaces/menu'
 
 Bluebird.promisifyAll(fs)
@@ -627,7 +628,7 @@ export default class Renderer extends Model {
 
   async clearOutputFolder() {
     try {
-      fse.emptyDirSync(this.outputDir)
+      clearGeneratedOutput(this.outputDir)
     } catch (e) {
       console.log('Delete file error', e)
     }

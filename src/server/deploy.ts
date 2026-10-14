@@ -13,6 +13,8 @@ export default class Deploy extends Model {
 
   platformAddress = ''
 
+  remoteInfo: any = {}
+
   http = new GitProxy(this)
 
   constructor(appInstance: any) {
@@ -81,6 +83,7 @@ export default class Deploy extends Model {
         url: this.remoteUrl,
       })
       console.log('info', info)
+      this.remoteInfo = info
       result.message = info.capabilities
     } catch (e) {
       console.log('Test Remote Error: ', e)
@@ -91,7 +94,10 @@ export default class Deploy extends Model {
   }
 
   async publish() {
-    await this.remoteDetect()
+    const detected = await this.remoteDetect()
+    if (!detected.success) {
+      return { ...detected, localBranchs: {} }
+    }
     this.db.themeConfig.domain = this.db.setting.domain
     let result = {
       success: true,
@@ -118,22 +124,39 @@ export default class Deploy extends Model {
     const { setting } = this.db
     const localBranchs = {}
     try {
-      const statusSummary = await git.status({ fs, dir: this.outputDir, filepath: '.' })
-      console.log('statusSummary', statusSummary)
       await git.addRemote({
         fs, dir: this.outputDir, remote: 'origin', url: this.remoteUrl, force: true,
       })
 
-      if (statusSummary !== 'unmodified') {
-        await git.add({ fs, dir: this.outputDir, filepath: '.' })
+      await this.checkCurrentBranch()
+      const statuses = await git.statusMatrix({ fs, dir: this.outputDir })
+      // Each staging operation updates the same index, so keep them sequential.
+      /* eslint-disable no-await-in-loop */
+      for (const [filepath, head, workdir, stage] of statuses) {
+        if (head !== workdir || head !== stage) {
+          if (workdir === 0) {
+            await git.remove({ fs, dir: this.outputDir, filepath })
+          } else {
+            await git.add({ fs, dir: this.outputDir, filepath })
+          }
+        }
+      }
+      /* eslint-enable no-await-in-loop */
+      const staged = await git.statusMatrix({ fs, dir: this.outputDir })
+      const hasChanges = staged.some(([, head, , stage]: [string, number, number, number]) => head !== stage)
+      if (!hasChanges && staged.length > 0) {
+        return {
+          success: true, data: null, message: '', localBranchs,
+        }
+      }
+      if (hasChanges) {
         await git.commit({
           fs,
           dir: this.outputDir,
+          author: { name: setting.username, email: setting.email },
           message: `update from gridea: ${moment().format('YYYY-MM-DD HH:mm:ss')}`,
         })
       }
-
-      await this.checkCurrentBranch()
 
       const pushRes = await git.push({
         fs,
@@ -141,7 +164,7 @@ export default class Deploy extends Model {
         dir: this.outputDir,
         remote: 'origin',
         ref: setting.branch,
-        force: true,
+        force: false,
       })
       console.log('pushRes', pushRes)
       return {
@@ -162,20 +185,34 @@ export default class Deploy extends Model {
   }
 
   /**
-   * Check whether the branch needs to be switched,
-   * FIXME: if branch is change, then the fist push is not work. so need to push again.
+   * Use the published branch as the parent of the next generated snapshot.
+   * Fetch without checkout: a checkout would overwrite freshly rendered pages.
+   * This also reconnects caches created by older versions that discarded .git.
    */
   async checkCurrentBranch() {
     const { setting } = this.db
-    const currentBranch = await git.currentBranch({ fs, dir: this.outputDir, fullname: false })
-    const localBranches = await git.listBranches({ fs, dir: this.outputDir })
-
-    if (currentBranch !== setting.branch) {
-      if (!localBranches.includes(setting.branch)) {
-        await git.branch({ fs, dir: this.outputDir, ref: setting.branch })
-      }
-
-      await git.checkout({ fs, dir: this.outputDir, ref: setting.branch })
+    const ref = `refs/heads/${setting.branch}`
+    const heads = this.remoteInfo.refs && this.remoteInfo.refs.heads
+    const remoteOid = setting.branch.split('/').reduce((refs: any, part: string) => refs && refs[part], heads)
+    if (typeof remoteOid === 'string') {
+      const fetched = await git.fetch({
+        fs,
+        http: this.http,
+        dir: this.outputDir,
+        remote: 'origin',
+        ref: setting.branch,
+        singleBranch: true,
+        tags: false,
+      })
+      await git.writeRef({
+        fs, dir: this.outputDir, ref, value: fetched.fetchHead, force: true,
+      })
+    } else {
+      // A new target branch must not inherit cached history from another site.
+      await git.deleteRef({ fs, dir: this.outputDir, ref })
     }
+    await git.writeRef({
+      fs, dir: this.outputDir, ref: 'HEAD', value: ref, symbolic: true, force: true,
+    })
   }
 }
