@@ -97,11 +97,5 @@ $ yarn electron:build
 We welcome all contributions. You can submit any ideas as [pull requests](https://github.com/getgridea/gridea/pulls) or as GitHub [issues](https://github.com/getgridea/gridea/issues).   
 
 
-## Donation
-<div>
-  <img src="./files/wechat.png" width="240px">
-</div>
-
-
 ## License
 [MIT](https://github.com/getgridea/gridea/blob/master/LICENSE). Copyright (c) 2020-2023 EryouHao
